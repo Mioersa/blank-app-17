@@ -72,7 +72,6 @@ final_df = pd.concat(filtered).sort_values(["contract", "timestamp"]).reset_inde
 # 5. Utility function for metric analytics
 # ------------------------------------------------------------
 def compute_indicators(df: pd.DataFrame, metric: str):
-    """Calculate Δmetric, ΔPrice, relative ratio, oscillator, corr, SMA, and classify signals."""
     if metric not in df.columns:
         st.warning(f"Missing column '{metric}' in data.")
         return pd.DataFrame()
@@ -91,57 +90,54 @@ def compute_indicators(df: pd.DataFrame, metric: str):
     out["Δ Price"] = out["last_price"].diff()
     out[f"Cum_{metric}"] = out[f"Δ {metric}"].cumsum()
 
-    # Ratio & Oscillator
-    rolling_N = 5
-    out["Ratio"] = out[f"Δ {metric}"] / out[f"Δ {metric}"].rolling(rolling_N, min_periods=1).mean()
-    short, long = 3, 10
-    ema_s = out[f"Δ {metric}"].ewm(span=short, adjust=False).mean()
-    ema_l = out[f"Δ {metric}"].ewm(span=long, adjust=False).mean()
-    out["Osc"] = ema_s - ema_l
+    # Relative ratio & oscillator
+    N = 5
+    out["Ratio"] = out[f"Δ {metric}"] / out[f"Δ {metric}"].rolling(N, min_periods=1).mean()
+    out["Osc"] = (
+        out[f"Δ {metric}"].ewm(span=3, adjust=False).mean()
+        - out[f"Δ {metric}"].ewm(span=10, adjust=False).mean()
+    )
     out["RollCorr"] = out["Δ Price"].rolling(5).corr(out[f"Δ {metric}"])
 
-    # Spike flag
     mu, sig = out[f"Δ {metric}"].mean(), out[f"Δ {metric}"].std()
     out["spike_flag"] = out[f"Δ {metric}"] > (mu + 2 * sig)
-
-    # SMA and classification
     out["SMA_Δ"] = out[f"Δ {metric}"].rolling(5, min_periods=1).mean().round(2)
 
+    # classification
     def classify(row):
         slope = np.sign(row[f"Δ {metric}"]) or 0
         corr = np.sign(row["RollCorr"]) if not np.isnan(row["RollCorr"]) else 0
         score = slope * corr
         return 1 if score > 0 else (-1 if score < 0 else 0)
-
     out["Signal_Val"] = out.apply(classify, axis=1)
     out["Signal_Label"] = out["Signal_Val"].map({1: "🟢 Bullish", 0: "⚪ Neutral", -1: "🔴 Bearish"})
 
-    # Label strength signals
     def describe_ratio(x):
         return "🚀 High" if x > 1.5 else ("🧊 Low" if x < 0.7 else "⚪ Normal")
-
     def describe_osc(x):
         return "🟢 Up" if x > 0 else ("🔴 Down" if x < 0 else "⚪ Flat")
-
     out["Ratio_Signal"] = out["Ratio"].apply(describe_ratio)
     out["Osc_Signal"] = out["Osc"].apply(describe_osc)
 
-    # Select organized columns
     return out[
-        ["time", f"Δ {metric}", "Δ Price", "Ratio", "Ratio_Signal",
-         "Osc", "Osc_Signal", "RollCorr", "spike_flag",
-         "SMA_Δ", "Signal_Label"]
+        [
+            "time", f"Δ {metric}", "Δ Price",
+            "Ratio", "Ratio_Signal",
+            "Osc", "Osc_Signal",
+            "RollCorr", "spike_flag", "SMA_Δ",
+            "Signal_Label",
+        ]
     ]
 
 # ------------------------------------------------------------
-# 6. Run computations for each metric
+# 6. Run computations
 # ------------------------------------------------------------
 vol_df = compute_indicators(final_df, "volume")
 oi_df = compute_indicators(final_df, "openInterest")
 turn_df = compute_indicators(final_df, "totalTurnover")
 
 # ------------------------------------------------------------
-# 7. Display individual tables
+# 7. Show individual tables
 # ------------------------------------------------------------
 st.subheader("📊 Volume‑based Indicators")
 st.dataframe(vol_df)
@@ -153,36 +149,38 @@ st.subheader("💰 Total Turnover‑based Indicators")
 st.dataframe(turn_df)
 
 # ------------------------------------------------------------
-# 8. Combined Summary Table
+# 8. Combined Summary Table — now includes Ratio + Osc signals
 # ------------------------------------------------------------
 combined = pd.DataFrame({"time": vol_df["time"] if not vol_df.empty else None})
 if not vol_df.empty:
-    combined["Volume_Signal"] = vol_df["Signal_Label"]
+    combined["Vol_Signal"] = vol_df["Signal_Label"]
+    combined["Vol_Ratio"] = vol_df["Ratio_Signal"]
+    combined["Vol_Osc"] = vol_df["Osc_Signal"]
 if not oi_df.empty:
     combined["OI_Signal"] = oi_df["Signal_Label"]
+    combined["OI_Ratio"] = oi_df["Ratio_Signal"]
+    combined["OI_Osc"] = oi_df["Osc_Signal"]
 if not turn_df.empty:
-    combined["Turnover_Signal"] = turn_df["Signal_Label"]
+    combined["Turn_Signal"] = turn_df["Signal_Label"]
+    combined["Turn_Ratio"] = turn_df["Ratio_Signal"]
+    combined["Turn_Osc"] = turn_df["Osc_Signal"]
 
-st.subheader("🪄 Combined Signal Summary")
+st.subheader("🪄 Combined Signal Summary (Vol / OI / Turnover)")
 st.dataframe(combined)
 
 # ------------------------------------------------------------
-# 9. Overall directional bias (based on turnover by default)
+# 9. Overall Turnover bias signal
 # ------------------------------------------------------------
 if not turn_df.empty:
-    last_rows = turn_df.tail(5)
-    slope = np.sign(last_rows["SMA_Δ"].iloc[-1] - last_rows["SMA_Δ"].iloc[0])
+    last = turn_df.tail(5)
+    slope = np.sign(last["SMA_Δ"].iloc[-1] - last["SMA_Δ"].iloc[0])
     corr_sign = np.sign(turn_df["RollCorr"].iloc[-1])
     score = slope * corr_sign
     if score > 0:
-        signal = "🟢 **Bullish Accumulation (Turnover)**"
+        result = "🟢 **Bullish Turnover Bias**"
     elif score < 0:
-        signal = "🔴 **Bearish Distribution (Turnover)**"
+        result = "🔴 **Bearish Turnover Bias**"
     else:
-        signal = "⚪ **Neutral / Indecisive (Turnover)**"
-    st.subheader("📈 Overall Auto‑Signal (Last 5 Samples)")
-    st.markdown(signal)
-
-
-
-
+        result = "⚪ **Neutral Turnover Bias**"
+    st.subheader("📈 Overall Auto‑Signal (Last 5)")
+    st.markdown(result)

@@ -1,13 +1,17 @@
+# ------------------------------------------------------------
+# Intraday Futures — Multi‑Metric Signal Analytics + Volume Chart
+# ------------------------------------------------------------
 import streamlit as st
 import pandas as pd
 import numpy as np
 import re
 from datetime import datetime
+import plotly.graph_objects as go
 
-st.set_page_config(page_title="Futures Multi‑Metric Signal Analytics", layout="wide")
+st.set_page_config(page_title="Futures Multi‑Metric Analytics", layout="wide")
 
 # ------------------------------------------------------------
-# 1. File Upload
+# 1. Upload CSVs
 # ------------------------------------------------------------
 st.sidebar.title("📂 Upload Intraday Futures CSVs")
 uploaded_files = st.sidebar.file_uploader(
@@ -18,10 +22,9 @@ if not uploaded_files:
     st.stop()
 
 # ------------------------------------------------------------
-# 2. Read & parse
+# 2. Read files
 # ------------------------------------------------------------
 dfs, upload_times, upload_labels = [], [], []
-
 for uploaded in uploaded_files:
     fn = uploaded.name
     m = re.search(r"_(\d{2})(\d{2})(\d{4})_(\d{2})(\d{2})(\d{2})\.csv$", fn)
@@ -43,16 +46,12 @@ for uploaded in uploaded_files:
 # 3. Expiry selector
 # ------------------------------------------------------------
 first_df = dfs[0]
-if "expiryDate" not in first_df.columns:
+if "expiryDate" not in first_df:
     st.error("❌ Column 'expiryDate' not found.")
     st.stop()
-
 expiry_opts = sorted(first_df["expiryDate"].unique())
 expiry = st.selectbox("Select expiry", expiry_opts)
 
-# ------------------------------------------------------------
-# 4. Merge datasets for that expiry
-# ------------------------------------------------------------
 filtered = []
 for i, df_file in enumerate(dfs):
     sub = df_file[df_file["expiryDate"] == expiry].copy()
@@ -61,19 +60,16 @@ for i, df_file in enumerate(dfs):
     sub["label"] = upload_labels[i]
     sub["capture_time"] = upload_times[i]
     filtered.append(sub)
-
 if not filtered:
-    st.warning("No data for chosen expiry.")
     st.stop()
 
 final_df = pd.concat(filtered).sort_values(["contract", "timestamp"]).reset_index(drop=True)
 
 # ------------------------------------------------------------
-# 5. Utility function for metric analytics
+# 4. Compute indicators for any metric
 # ------------------------------------------------------------
 def compute_indicators(df: pd.DataFrame, metric: str):
     if metric not in df.columns:
-        st.warning(f"Missing column '{metric}' in data.")
         return pd.DataFrame()
 
     records = []
@@ -84,26 +80,19 @@ def compute_indicators(df: pd.DataFrame, metric: str):
         val = sub[metric].iloc[0]
         price = sub["lastPrice"].iloc[-1] if "lastPrice" in sub else np.nan
         records.append({"time": lbl, metric: val, "last_price": price})
-
     out = pd.DataFrame(records)
     out[f"Δ {metric}"] = out[metric].diff()
     out["Δ Price"] = out["last_price"].diff()
-    out[f"Cum_{metric}"] = out[f"Δ {metric}"].cumsum()
-
-    # Relative ratio & oscillator
-    N = 5
-    out["Ratio"] = out[f"Δ {metric}"] / out[f"Δ {metric}"].rolling(N, min_periods=1).mean()
+    out["Ratio"] = out[f"Δ {metric}"] / out[f"Δ {metric}"].rolling(5, min_periods=1).mean()
     out["Osc"] = (
         out[f"Δ {metric}"].ewm(span=3, adjust=False).mean()
         - out[f"Δ {metric}"].ewm(span=10, adjust=False).mean()
     )
     out["RollCorr"] = out["Δ Price"].rolling(5).corr(out[f"Δ {metric}"])
-
     mu, sig = out[f"Δ {metric}"].mean(), out[f"Δ {metric}"].std()
     out["spike_flag"] = out[f"Δ {metric}"] > (mu + 2 * sig)
     out["SMA_Δ"] = out[f"Δ {metric}"].rolling(5, min_periods=1).mean().round(2)
 
-    # classification
     def classify(row):
         slope = np.sign(row[f"Δ {metric}"]) or 0
         corr = np.sign(row["RollCorr"]) if not np.isnan(row["RollCorr"]) else 0
@@ -111,45 +100,34 @@ def compute_indicators(df: pd.DataFrame, metric: str):
         return 1 if score > 0 else (-1 if score < 0 else 0)
     out["Signal_Val"] = out.apply(classify, axis=1)
     out["Signal_Label"] = out["Signal_Val"].map({1: "🟢 Bullish", 0: "⚪ Neutral", -1: "🔴 Bearish"})
-
-    def describe_ratio(x):
-        return "🚀 High" if x > 1.5 else ("🧊 Low" if x < 0.7 else "⚪ Normal")
-    def describe_osc(x):
-        return "🟢 Up" if x > 0 else ("🔴 Down" if x < 0 else "⚪ Flat")
+    def describe_ratio(x): return "🚀 High" if x > 1.5 else ("🧊 Low" if x < 0.7 else "⚪ Normal")
+    def describe_osc(x): return "🟢 Up" if x > 0 else ("🔴 Down" if x < 0 else "⚪ Flat")
     out["Ratio_Signal"] = out["Ratio"].apply(describe_ratio)
     out["Osc_Signal"] = out["Osc"].apply(describe_osc)
-
     return out[
-        [
-            "time", f"Δ {metric}", "Δ Price",
-            "Ratio", "Ratio_Signal",
-            "Osc", "Osc_Signal",
-            "RollCorr", "spike_flag", "SMA_Δ",
-            "Signal_Label",
-        ]
+        ["time", f"Δ {metric}", "Δ Price", "Ratio", "Ratio_Signal",
+         "Osc", "Osc_Signal", "RollCorr", "SMA_Δ", "Signal_Label"]
     ]
 
 # ------------------------------------------------------------
-# 6. Run computations
+# 5. Run for volume, OI, turnover
 # ------------------------------------------------------------
 vol_df = compute_indicators(final_df, "volume")
 oi_df = compute_indicators(final_df, "openInterest")
 turn_df = compute_indicators(final_df, "totalTurnover")
 
 # ------------------------------------------------------------
-# 7. Show individual tables
+# 6. Show summary tables
 # ------------------------------------------------------------
 st.subheader("📊 Volume‑based Indicators")
 st.dataframe(vol_df)
-
 st.subheader("📈 Open Interest‑based Indicators")
 st.dataframe(oi_df)
-
 st.subheader("💰 Total Turnover‑based Indicators")
 st.dataframe(turn_df)
 
 # ------------------------------------------------------------
-# 8. Combined Summary Table — now includes Ratio + Osc signals
+# 7. Combined Table
 # ------------------------------------------------------------
 combined = pd.DataFrame({"time": vol_df["time"] if not vol_df.empty else None})
 if not vol_df.empty:
@@ -169,7 +147,45 @@ st.subheader("🪄 Combined Signal Summary (Vol / OI / Turnover)")
 st.dataframe(combined)
 
 # ------------------------------------------------------------
-# 9. Overall Turnover bias signal
+# 8. Chart — Last Price (top) & Δ Volume (bottom)
+# ------------------------------------------------------------
+if not vol_df.empty:
+    st.subheader("📈 Chart – Last Price (top) & Δ Volume (bottom, no truncation)")
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=vol_df["time"],
+            y=vol_df["Δ volume"],
+            name="Δ Volume",
+            marker_color="orange",
+            opacity=0.6,
+            yaxis="y2"
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=vol_df["time"],
+            y=vol_df["Δ Price"].cumsum(),  # approximate proxy for price trend if desired
+            mode="lines+markers",
+            name="Last Price",
+            line=dict(color="blue"),
+            yaxis="y1"
+        )
+    )
+    fig.update_layout(
+        height=600,
+        margin=dict(l=60, r=40, t=60, b=60),
+        xaxis=dict(title="Capture Time (HH:MM)", rangeslider=dict(visible=True)),
+        yaxis=dict(domain=[0.45, 1.0], title="Last Price", tickformat="none"),
+        yaxis2=dict(domain=[0.0, 0.35], title="Δ Volume", tickformat="none"),  # no K truncation
+        hovermode="x unified",
+        legend=dict(orientation="h"),
+        title="Last Price & Δ Volume (Precise Y‑axis Numbers)"
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+# ------------------------------------------------------------
+# 9. Overall Turnover bias
 # ------------------------------------------------------------
 if not turn_df.empty:
     last = turn_df.tail(5)

@@ -188,7 +188,7 @@ st.subheader("🪄 Combined Signal Summary (Vol / OI / Turnover 
 st.dataframe(combined)
 
 # ------------------------------------------------------------
-# 8. Chart — Last Price (top) & Δ Volume (bottom, no truncation)
+# 8. Chart — Last Price (top) & Δ Volume (bottom)
 # ------------------------------------------------------------
 if not vol_df.empty:
     st.subheader("📈 Chart – Last Price (top) & Δ Volume (bottom, no truncation)")
@@ -217,8 +217,8 @@ if not vol_df.empty:
         height=600,
         margin=dict(l=60, r=40, t=60, b=60),
         xaxis=dict(title="Capture Time (HH:MM)", rangeslider=dict(visible=True)),
-        yaxis=dict(domain=[0.45, 1.0], title="Last Price", tickformat="none"),
-        yaxis2=dict(domain=[0.0, 0.35], title="Δ Volume ", tickformat="none"),
+        yaxis=dict(domain=[0.45, 1.0], title="Last Price"),
+        yaxis2=dict(domain=[0.0, 0.35], title="Δ Volume"),
         hovermode="x unified",
         legend=dict(orientation="h"),
         title="Last Price & Δ Volume (precise numbers)",
@@ -241,3 +241,34 @@ if not turn_df.empty:
         result = "⚪ **Neutral Turnover Bias**"
     st.subheader("📈 Overall Auto‑Signal (Last 5)")
     st.markdown(result)
+
+# ------------------------------------------------------------
+# 10. 📊 Custom Column Plotter (NEW)
+# ------------------------------------------------------------
+st.subheader("📊 Custom Column Plotter")
+
+if not combined.empty:
+    columns_to_plot = [c for c in combined.columns if c != "time"]
+    selected_col = st.selectbox("Select a column to plot", columns_to_plot)
+
+    if st.button("Plot Chart"):
+        fig2 = go.Figure()
+        fig2.add_trace(
+            go.Scatter(
+                x=combined["time"],
+                y=combined[selected_col],
+                mode="lines+markers",
+                line=dict(color="purple"),
+                name=selected_col,
+            )
+        )
+        fig2.update_layout(
+            title=f"{selected_col} vs Time",
+            xaxis_title="Time",
+            yaxis_title=selected_col,
+            height=500,
+            margin=dict(l=60, r=40, t=60, b=60),
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+else:
+    st.info("No Combined Summary available yet.")

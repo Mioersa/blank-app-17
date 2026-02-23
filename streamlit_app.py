@@ -139,6 +139,38 @@ turn_df = compute_indicators(final_df, "totalTurnover")
 # ------------------------------------------------------------
 st.subheader("📊 Volume‑based Indicators")
 st.dataframe(vol_df)
+
+# -------- NEW: Volume‑based Column Selector Chart ----------
+st.markdown("#### 📊 Volume‑based Column Plotter")
+if not vol_df.empty:
+    vol_cols = [c for c in vol_df.columns if c != "time"]
+    selected_vol_col = st.selectbox("Select column from Volume‑based Indicators", vol_cols, key="vol_plot")
+
+    if st.button("Plot Volume Chart"):
+        fig_vol = go.Figure()
+        fig_vol.add_trace(
+            go.Scatter(
+                x=vol_df["time"],
+                y=vol_df[selected_vol_col],
+                mode="lines+markers",
+                line=dict(color="firebrick"),
+                name=selected_vol_col,
+            )
+        )
+        fig_vol.update_layout(
+            title=f"{selected_vol_col} vs Time (Volume Indicators)",
+            xaxis_title="Time",
+            yaxis_title=selected_vol_col,
+            height=500,
+            margin=dict(l=60, r=40, t=60, b=60),
+        )
+        st.plotly_chart(fig_vol, use_container_width=True)
+else:
+    st.info("No Volume indicator data available.")
+
+# ------------------------------------------------------------
+# Rest of indicators
+# ------------------------------------------------------------
 st.subheader("📈 Open Interest‑based Indicators")
 st.dataframe(oi_df)
 st.subheader("💰 Total Turnover‑based Indicators")
@@ -161,7 +193,6 @@ if not turn_df.empty:
     combined["Turn_Ratio"] = turn_df["Ratio_Signal"]
     combined["Turn_Osc"] = turn_df["Osc_Signal"]
 
-# --- overall conditions (row‑wise) ---
 def overall_signal(row):
     vals = [row.get("Vol_Signal"), row.get("OI_Signal"), row.get("Turn_Signal")]
     if all(v == "🟢 Bullish" for v in vals): return "🟢 Bullish"
@@ -188,10 +219,10 @@ st.subheader("🪄 Combined Signal Summary (Vol / OI / Turnover 
 st.dataframe(combined)
 
 # ------------------------------------------------------------
-# 8. Chart — Last Price (top) & Δ Volume (bottom)
+# 8. Default ΔVolume chart (unchanged)
 # ------------------------------------------------------------
 if not vol_df.empty:
-    st.subheader("📈 Chart – Last Price (top) & Δ Volume (bottom, no truncation)")
+    st.subheader("📈 Chart – Last Price (top) & Δ Volume (bottom)")
     fig = go.Figure()
     fig.add_trace(
         go.Bar(
@@ -226,7 +257,7 @@ if not vol_df.empty:
     st.plotly_chart(fig, use_container_width=True)
 
 # ------------------------------------------------------------
-# 9. Overall Turnover bias (macro summary)
+# 9. Overall Turnover bias summary
 # ------------------------------------------------------------
 if not turn_df.empty:
     last = turn_df.tail(5)
@@ -243,15 +274,15 @@ if not turn_df.empty:
     st.markdown(result)
 
 # ------------------------------------------------------------
-# 10. 📊 Custom Column Plotter (NEW)
+# 10. Custom Column Plotter for Combined Summary
 # ------------------------------------------------------------
-st.subheader("📊 Custom Column Plotter")
+st.subheader("📊 Custom Column Plotter (Combined Summary)")
 
 if not combined.empty:
     columns_to_plot = [c for c in combined.columns if c != "time"]
-    selected_col = st.selectbox("Select a column to plot", columns_to_plot)
+    selected_col = st.selectbox("Select a column to plot", columns_to_plot, key="combined_plot")
 
-    if st.button("Plot Chart"):
+    if st.button("Plot Combined Chart"):
         fig2 = go.Figure()
         fig2.add_trace(
             go.Scatter(
@@ -263,7 +294,7 @@ if not combined.empty:
             )
         )
         fig2.update_layout(
-            title=f"{selected_col} vs Time",
+            title=f"{selected_col} vs Time (Combined Summary)",
             xaxis_title="Time",
             yaxis_title=selected_col,
             height=500,
